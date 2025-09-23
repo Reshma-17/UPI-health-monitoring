@@ -1,0 +1,172 @@
+services:
+  # Core Kafka Infrastructure
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+
+  kafka:
+    image: confluentinc/cp-kafka:7.4.0
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,PLAINTEXT_HOST://kafka:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT_HOST
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+    ports:
+      - "9092:9092"
+    depends_on:
+      - zookeeper
+
+  # Free Local LLM with Ollama
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      - OLLAMA_MODELS=llama2,mistral,codellama
+    restart: unless-stopped
+
+  # Vector Database for RAG (Using ChromaDB - Free Alternative)
+  chromadb:
+    image: ghcr.io/chroma-core/chroma:latest
+    ports:
+      - "8333:8000"
+    volumes:
+      - chromadb_data:/chroma/chroma
+    environment:
+      - CHROMA_SERVER_HOST=0.0.0.0
+    restart: unless-stopped
+
+  # Redis for real-time data and caching
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  # PostgreSQL for persistent storage
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: fintech_monitoring
+      POSTGRES_USER: fintech
+      POSTGRES_PASSWORD: fintech123
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  # Enhanced Transaction Producer
+  txn_producer:
+    build:
+      context: ./txn_producer
+    depends_on:
+      - kafka
+      - redis
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - REDIS_URL=redis://redis:6379
+    restart: unless-stopped
+
+  # 🎯 PATHWAY PROCESSOR - The star of the hackathon!
+  pathway_processor:
+    build:
+      context: ./pathway_processor
+    depends_on:
+      - kafka
+      - redis
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - REDIS_URL=redis://redis:6379
+    restart: unless-stopped
+
+  # Anomaly Detection Engine (Free Version)
+  anomaly_detector:
+    build:
+      context: ./anomaly_detector
+    depends_on:
+      - kafka
+      - redis
+      - postgres
+      - chromadb
+      - ollama
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - REDIS_URL=redis://redis:6379
+      - DATABASE_URL=postgresql://fintech:fintech123@postgres:5432/fintech_monitoring
+      - CHROMA_HOST=chromadb
+      - CHROMA_PORT=8000
+      - OLLAMA_HOST=ollama
+      - OLLAMA_PORT=11434
+    restart: unless-stopped
+
+  # RAG Knowledge Ingestion Service (Free Version)
+  rag_ingestion:
+    build:
+      context: ./rag_ingestion
+    depends_on:
+      - chromadb
+      - postgres
+      - ollama
+    environment:
+      - CHROMA_HOST=chromadb
+      - CHROMA_PORT=8000
+      - DATABASE_URL=postgresql://fintech:fintech123@postgres:5432/fintech_monitoring
+      - OLLAMA_HOST=ollama
+      - OLLAMA_PORT=11434
+    restart: unless-stopped
+
+  # Alert Management System
+  alert_manager:
+    build:
+      context: ./alert_manager
+    depends_on:
+      - kafka
+      - redis
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - REDIS_URL=redis://redis:6379
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+    restart: unless-stopped
+
+  # Streamlit Dashboard
+  dashboard:
+    build:
+      context: ./dashboard
+    depends_on:
+      - redis
+      - postgres
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - DATABASE_URL=postgresql://fintech:fintech123@postgres:5432/fintech_monitoring
+    ports:
+      - "8501:8501"
+    restart: unless-stopped
+
+  # API Gateway
+  api_gateway:
+    build:
+      context: ./api_gateway
+    depends_on:
+      - redis
+      - postgres
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - DATABASE_URL=postgresql://fintech:fintech123@postgres:5432/fintech_monitoring
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  ollama_data:
+  chromadb_data:
